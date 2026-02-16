@@ -29,7 +29,7 @@ import (
 )
 
 // Version defines the application version.
-const Version = "mkpasswd-go 1.4"
+const Version = "mkpasswd-go 1.0"
 
 const (
 	defaultMethod = "sha-512"
