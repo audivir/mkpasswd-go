@@ -39,7 +39,7 @@ apk add libxcrypt-dev
 
 ```bash
 # on macOS
-# export PKG_CONFIG_PATH=/usr/local/opt/libxcrypt/lib/pkgconfig
+# export PKG_CONFIG_PATH="$(brew --prefix libxcrypt)/lib/pkgconfig"
 
 go install github.com/audivir/mkpasswd-go@latest
 
@@ -49,7 +49,7 @@ Or build manually:
 
 ```bash
 # on macOS
-# export PKG_CONFIG_PATH=/usr/local/opt/libxcrypt/lib/pkgconfig
+# export PKG_CONFIG_PATH="$(brew --prefix libxcrypt)/lib/pkgconfig"
 
 git clone https://github.com/audivir/mkpasswd-go
 cd mkpasswd-go

@@ -83,10 +83,9 @@ var testCases = []struct {
 func TestCryptCompatibility(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.Desc, func(t *testing.T) {
-			// When the existing hash is passed as the 'salt' argument,
-			// crypt(3) extracts the settings (method, rounds, salt)
-			// and re-hashes the password to verify a match.
-			got, err := cryptWrapper(tc.Password, tc.Salt)
+			// Passing the existing hash as the salt argument causes crypt(3) to extract the
+			// method, rounds, and salt, then re-hash the password to verify a match.
+			got, err := crypt(tc.Password, tc.Salt)
 
 			if err != nil {
 				t.Fatalf("Crypt execution failed: %v", err)

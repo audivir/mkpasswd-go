@@ -1,6 +1,6 @@
-// mkpasswd-go is a Go implementation of the classic `mkpasswd` utility (originally part of the Debian `whois` package, maintained by Marco d'Itri).
-// It wraps the system's `crypt(3)` library to generate cryptographically strong hashed passwords.
-// It supports modern hashing algorithms like yescrypt, bcrypt, and SHA-512.
+// mkpasswd-go is a Go implementation of the mkpasswd utility.
+// It wraps the system crypt(3) library to generate hashed passwords using
+// yescrypt, bcrypt, and SHA-512.
 
 package main
 
@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -28,8 +29,17 @@ import (
 	"golang.org/x/term"
 )
 
-// Version defines the application version.
-const Version = "mkpasswd-go 1.0"
+// Version is resolved from module build info for go install, overridden via
+// -ldflags -X main.version=... for release builds, and falls back to dev otherwise.
+var version = "dev"
+
+func init() {
+	if version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			version = info.Main.Version
+		}
+	}
+}
 
 const (
 	defaultMethod = "sha-512"
@@ -37,7 +47,7 @@ const (
 	cryptBase64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
 
-// methodDef defines the salt generation rules.
+// methodDef stores the salt generation rules for a hash method.
 type methodDef struct {
 	Prefix         string
 	MinSaltLen     int
@@ -94,9 +104,9 @@ type config struct {
 
 func main() {
 	cmd := &cli.Command{
-		Name:            "mkpasswd",
+		Name:            "mkpasswd-go",
 		Usage:           "Wraps system crypt(3) to generate passwords",
-		Version:         Version,
+		Version:         version,
 		ArgsUsage:       "[password] [salt]",
 		Flags:           buildFlags(),
 		Action:          run,
@@ -104,14 +114,14 @@ func main() {
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		// Only print the error, simpler than Fprintf for one-liners
+
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 }
 
 func buildFlags() []cli.Flag {
-	// Pre-sort choices for help text
+
 	choices := make([]string, 0, len(knownMethods))
 	for k := range knownMethods {
 		choices = append(choices, k)
@@ -123,7 +133,7 @@ func buildFlags() []cli.Flag {
 			Name:    "method",
 			Aliases: []string{"m"},
 			Value:   defaultMethod,
-			Usage:   "Select encryption method", // fmt.Sprintf("Select encryption method (available: %s)", strings.Join(choices, ", ")),
+			Usage:   "Select encryption method",
 			Validator: func(val string) error {
 				if a, ok := aliases[strings.ToLower(val)]; ok {
 					val = a
@@ -171,18 +181,18 @@ func run(ctx context.Context, cmd *cli.Command) error {
 
 	cfg := config{
 		Method:   strings.ToLower(cmd.String("method")),
-		Salt:     cmd.Args().Get(1), // Arg takes precedence
+		Salt:     cmd.Args().Get(1),
 		Rounds:   cmd.Int("rounds"),
 		UseStdin: cmd.Bool("stdin"),
 		Password: cmd.Args().First(),
 		Verbose:  cmd.Bool("verbose"),
 	}
 
-	// Resolve alias
+	// Resolve the method alias to its canonical name.
 	if realName, ok := aliases[cfg.Method]; ok {
 		cfg.Method = realName
 	}
-	// Flag overrides Arg for salt if arg is empty
+	// Use the salt flag when the salt argument is empty.
 	if cfg.Salt == "" {
 		cfg.Salt = cmd.String("salt")
 	} else if cfg.Verbose && cmd.String("salt") != "" {
@@ -215,12 +225,12 @@ func run(ctx context.Context, cmd *cli.Command) error {
 
 // buildSetting constructs the salt/settings string.
 func buildSetting(cfg config, def methodDef) (string, error) {
-	// 1. If user provided a full setting string ($...), use it.
+	// Use the user-provided setting string if it starts with $ or _.
 	if cfg.Salt != "" && (strings.HasPrefix(cfg.Salt, "$") || strings.HasPrefix(cfg.Salt, "_")) {
 		return cfg.Salt, nil
 	}
 
-	// 2. Validate/Normalize Rounds
+	// Validate and normalize the rounds value against the method definition.
 	if def.HasRounds {
 		if cfg.Rounds == 0 {
 			cfg.Rounds = def.DefaultRounds
@@ -235,9 +245,8 @@ func buildSetting(cfg config, def methodDef) (string, error) {
 		fmt.Fprintf(os.Stderr, "rounds ignored for method %s\n", cfg.Method)
 	}
 
-	// 3. Handle specific formatting logic for complex prefixes
-	// Note: We construct the 'prefix' passed to crypt_gensalt.
-	// For most, it's just "$6$", but for some (like rounds=), we must pre-format.
+	// Construct the prefix passed to crypt_gensalt. Most methods use a fixed
+	// prefix like "$6$", but some require pre-formatted values such as rounds.
 	var prefixBuilder strings.Builder
 	prefixBuilder.WriteString(def.Prefix)
 
@@ -264,22 +273,20 @@ func buildSetting(cfg config, def methodDef) (string, error) {
 		}
 	}
 
-	// 4. Handle Salt
-	// If salt is "?" or empty, we generate it. If it's a raw string, we use it.
+	// Generate a salt if it is "?" or empty; otherwise use the raw string.
 	if cfg.Salt != "" && cfg.Salt != "?" {
-		// User provided raw salt characters, append to prefix
+		// Append the user-provided raw salt characters to the prefix.
 		return prefixBuilder.String() + cfg.Salt, nil
 	}
 
-	// Generate salt using libcrypt
+	// Generate a salt via libcrypt.
 	if cfg.Verbose {
 		fmt.Fprintln(os.Stderr, "generating random salt")
 	}
 
 	saltLen := def.DefaultSaltLen
-	// Calculate remaining salt length needed (subtracting what we already built)
-	// Note: crypt_gensalt usually takes the raw byte count desired.
-	// We use 32 bytes of entropy to be safe.
+	// Calculate the remaining salt length after the prefix.
+	// crypt_gensalt expects the raw byte count; use 32 bytes of entropy.
 	entropy := make([]byte, 32)
 	if _, err := rand.Read(entropy); err != nil {
 		return "", err
@@ -351,8 +358,7 @@ func cryptGenSalt(prefix string, rounds uint64, entropy []byte, length int32) (s
 	cPrefix := C.CString(prefix)
 	defer C.free(unsafe.Pointer(cPrefix))
 
-	// Pass pointer to byte slice, not CString
-	// C.crypt_gensalt expects raw bytes, possibly containing nulls.
+	// Pass raw bytes, not a CString, because C.crypt_gensalt may receive nulls.
 	cEntropy := (*C.char)(unsafe.Pointer(&entropy[0]))
 
 	cResult, err := C.crypt_gensalt(cPrefix, C.ulong(rounds), cEntropy, C.int(length))
@@ -362,7 +368,7 @@ func cryptGenSalt(prefix string, rounds uint64, entropy []byte, length int32) (s
 	return C.GoString(cResult), nil
 }
 
-// intToCryptBase64 converts a uint32 to 4-char base64 (used for BSDi crypt).
+// intToCryptBase64 converts a uint32 to a 4-character base64 string for BSDi crypt.
 func intToCryptBase64(n uint32) string {
 	out := make([]byte, 4)
 	for i := 0; i < 4; i++ {
