@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 var testCases = []struct {
 	Desc     string
@@ -78,6 +82,51 @@ var testCases = []struct {
 	{"DES Explicit Salt | Pwd: correct-ho...", "correct-horse-battery-staple", "xy", "xyssDEVrYs7DU"},
 	{"DES Explicit Salt | Pwd: €uro_Symb0...", "€uro_Symb0l_&_Unicod3", "xy", "xyAKMJas9Q9K6"},
 	{"DES Explicit Salt | Pwd:  !\"#$%&'(...", " !\"#$%&'()*+,-./0123456789:;<=>?@[\\]^_`{|}~", "xy", "xyt39ciOTnr8g"},
+}
+
+// With --entropy-bytes 0, crypt_gensalt sources its own randomness
+var saltLenCases = []struct {
+	Method       string
+	EntropyBytes int
+	ExpectedLen  int
+}{
+	{"yescrypt", 0, 22},
+	{"yescrypt", 64, 86},
+	{"gost-yescrypt", 0, 22},
+	{"gost-yescrypt", 64, 86},
+	{"bcrypt", 0, 22},
+	{"bcrypt", 64, 22},
+	{"bcrypt-a", 0, 22},
+	{"bcrypt-a", 64, 22},
+	{"sha512crypt", 0, 16},
+	{"sha512crypt", 64, 16},
+	{"sha256crypt", 0, 16},
+	{"sha256crypt", 64, 16},
+	{"md5crypt", 0, 8},
+	{"md5crypt", 64, 8},
+}
+
+func TestSaltLen(t *testing.T) {
+	for _, tc := range saltLenCases {
+		t.Run(fmt.Sprintf("%s/entropy-bytes=%d", tc.Method, tc.EntropyBytes), func(t *testing.T) {
+			def := knownMethods[tc.Method]
+			cfg := config{Method: tc.Method, EntropyBytes: tc.EntropyBytes}
+
+			setting, err := buildSetting(cfg, def)
+			if err != nil {
+				t.Fatalf("buildSetting failed: %v", err)
+			}
+
+			salt := setting[strings.LastIndex(setting, "$")+1:]
+			if len(salt) != tc.ExpectedLen {
+				t.Errorf("salt length = %d, want %d (setting: %q)", len(salt), tc.ExpectedLen, setting)
+			}
+
+			if _, err := crypt("password", setting); err != nil {
+				t.Errorf("crypt failed with generated setting %q: %v", setting, err)
+			}
+		})
+	}
 }
 
 func TestCryptCompatibility(t *testing.T) {

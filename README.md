@@ -72,6 +72,9 @@ echo -n "mypassword" | mkpasswd-go -s
 # Specific algorithm and cost
 mkpasswd-go -m yescrypt -R 12
 
+# Match upstream mkpasswd.c salt generation
+mkpasswd-go -m yescrypt -E 64
+
 # Help
 mkpasswd-go --help
 ```

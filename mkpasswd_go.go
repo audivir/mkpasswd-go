@@ -94,12 +94,13 @@ var aliases = map[string]string{
 }
 
 type config struct {
-	Method   string
-	Salt     string
-	Rounds   int
-	UseStdin bool
-	Password string
-	Verbose  bool
+	Method       string
+	Salt         string
+	Rounds       int
+	EntropyBytes int
+	UseStdin     bool
+	Password     string
+	Verbose      bool
 }
 
 func main() {
@@ -161,6 +162,17 @@ func buildFlags() []cli.Flag {
 				return nil
 			},
 		},
+		&cli.IntFlag{
+			Name:    "entropy-bytes",
+			Aliases: []string{"E"},
+			Usage:   "Raw entropy bytes for auto salt generation (0 lets libxcrypt choose; upstream mkpasswd.c always uses 64)",
+			Validator: func(val int) error {
+				if val < 0 {
+					return errors.New("entropy-bytes must be >= 0")
+				}
+				return nil
+			},
+		},
 		&cli.BoolFlag{
 			Name:    "stdin",
 			Aliases: []string{"s"},
@@ -180,12 +192,13 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	cfg := config{
-		Method:   strings.ToLower(cmd.String("method")),
-		Salt:     cmd.Args().Get(1),
-		Rounds:   cmd.Int("rounds"),
-		UseStdin: cmd.Bool("stdin"),
-		Password: cmd.Args().First(),
-		Verbose:  cmd.Bool("verbose"),
+		Method:       strings.ToLower(cmd.String("method")),
+		Salt:         cmd.Args().Get(1),
+		Rounds:       cmd.Int("rounds"),
+		EntropyBytes: cmd.Int("entropy-bytes"),
+		UseStdin:     cmd.Bool("stdin"),
+		Password:     cmd.Args().First(),
+		Verbose:      cmd.Bool("verbose"),
 	}
 
 	// Resolve the method alias to its canonical name.
@@ -284,15 +297,19 @@ func buildSetting(cfg config, def methodDef) (string, error) {
 		fmt.Fprintln(os.Stderr, "generating random salt")
 	}
 
-	saltLen := def.DefaultSaltLen
-	// Calculate the remaining salt length after the prefix.
-	// crypt_gensalt expects the raw byte count; use 32 bytes of entropy.
-	entropy := make([]byte, 32)
-	if _, err := rand.Read(entropy); err != nil {
-		return "", err
+	// crypt_gensalt's length argument is a raw entropy byte count, not the output salt
+	// character count. With 0 bytes (the default), crypt_gensalt sources its own randomness
+	// and picks the canonical salt length per method. --entropy-bytes 64 replicates upstream
+	// mkpasswd.c, which always feeds it a fixed 64-byte buffer regardless of method.
+	var entropy []byte
+	if cfg.EntropyBytes > 0 {
+		entropy = make([]byte, cfg.EntropyBytes)
+		if _, err := rand.Read(entropy); err != nil {
+			return "", err
+		}
 	}
 
-	return cryptGenSalt(prefixBuilder.String(), uint64(cfg.Rounds), entropy, int32(saltLen))
+	return cryptGenSalt(prefixBuilder.String(), uint64(cfg.Rounds), entropy)
 }
 
 func resolvePassword(cfg config) (string, error) {
@@ -354,14 +371,19 @@ func crypt(pass, setting string) (string, error) {
 	return C.GoString(cResult), nil
 }
 
-func cryptGenSalt(prefix string, rounds uint64, entropy []byte, length int32) (string, error) {
+func cryptGenSalt(prefix string, rounds uint64, entropy []byte) (string, error) {
 	cPrefix := C.CString(prefix)
 	defer C.free(unsafe.Pointer(cPrefix))
 
-	// Pass raw bytes, not a CString, because C.crypt_gensalt may receive nulls.
-	cEntropy := (*C.char)(unsafe.Pointer(&entropy[0]))
+	// Pass raw bytes, not a CString, because C.crypt_gensalt may receive nulls. A nil/empty
+	// entropy leaves cEntropy as a null pointer, which tells crypt_gensalt to source its own
+	// randomness and pick the salt length itself.
+	var cEntropy *C.char
+	if len(entropy) > 0 {
+		cEntropy = (*C.char)(unsafe.Pointer(&entropy[0]))
+	}
 
-	cResult, err := C.crypt_gensalt(cPrefix, C.ulong(rounds), cEntropy, C.int(length))
+	cResult, err := C.crypt_gensalt(cPrefix, C.ulong(rounds), cEntropy, C.int(len(entropy)))
 	if cResult == nil {
 		return "", fmt.Errorf("crypt_gensalt failed: %v", err)
 	}
