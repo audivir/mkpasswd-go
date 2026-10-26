@@ -83,7 +83,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           docker run --rm -v "$PWD":/src -w /src -e VERSION="$GITHUB_REF_NAME" -e OUT="$BIN_NAME-linux-musl-$GOARCH" golang:1.26-alpine sh -ec '
-            apk add --no-cache build-base pkgconf curl xz
+            apk add --no-cache build-base pkgconf curl xz perl
             cd /tmp
             curl -fsSLO https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz
             curl -fsSLO https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz.sha256sum
