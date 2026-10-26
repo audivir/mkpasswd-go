@@ -64,9 +64,39 @@ jobs:
           name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ env.BIN_NAME }}-*
           retention-days: 1
+  build-musl:
+    # fully static against musl and libxcrypt from Alpine, so the binaries also run on Alpine
+    needs: check-version
+    name: Build for linux/${{ matrix.goarch }} (musl)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build static binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e VERSION="$GITHUB_REF_NAME" -e OUT="$BIN_NAME-linux-musl-$GOARCH" golang:1.26-alpine sh -c '
+            apk add --no-cache build-base pkgconf libxcrypt-dev libxcrypt-static &&
+            go build -ldflags="-s -w -linkmode external -extldflags \"-static\" -X main.version=$VERSION" -o "$OUT"'
+          if ! file "$BIN_NAME-linux-musl-$GOARCH" | grep -q "statically linked"; then
+            echo "::error::$BIN_NAME-linux-musl-$GOARCH is not statically linked"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-linux-musl-${{ matrix.goarch }}
+          path: ${{ env.BIN_NAME }}-*
+          retention-days: 1
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, build-musl]
     runs-on: ubuntu-latest
     steps:
       - name: Download all binaries
