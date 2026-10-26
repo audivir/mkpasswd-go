@@ -65,7 +65,7 @@ jobs:
           path: ${{ env.BIN_NAME }}-*
           retention-days: 1
   build-musl:
-    # fully static against musl and libxcrypt from Alpine, so the binaries also run on Alpine
+    # fully static against musl and a libxcrypt built from source, so the binaries also run on Alpine
     needs: check-version
     name: Build for linux/${{ matrix.goarch }} (musl)
     runs-on: ${{ matrix.runner }}
@@ -82,9 +82,18 @@ jobs:
         env:
           GOARCH: ${{ matrix.goarch }}
         run: |
-          docker run --rm -v "$PWD":/src -w /src -e VERSION="$GITHUB_REF_NAME" -e OUT="$BIN_NAME-linux-musl-$GOARCH" golang:1.26-alpine sh -c '
-            apk add --no-cache build-base pkgconf libxcrypt-dev libxcrypt-static &&
-            go build -ldflags="-s -w -linkmode external -extldflags \"-static\" -X main.version=$VERSION" -o "$OUT"'
+          docker run --rm -v "$PWD":/src -w /src -e VERSION="$GITHUB_REF_NAME" -e OUT="$BIN_NAME-linux-musl-$GOARCH" golang:1.26-alpine sh -ec '
+            apk add --no-cache build-base pkgconf curl xz
+            cd /tmp
+            curl -fsSLO https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz
+            curl -fsSLO https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz.sha256sum
+            sha256sum -c libxcrypt-4.5.2.tar.xz.sha256sum
+            tar -xf libxcrypt-4.5.2.tar.xz
+            cd libxcrypt-4.5.2
+            ./configure --prefix=/opt/xcrypt --disable-shared --enable-static
+            make -j"$(nproc)" install
+            cd /src
+            PKG_CONFIG_PATH=/opt/xcrypt/lib/pkgconfig go build -ldflags="-s -w -linkmode external -extldflags \"-static\" -X main.version=$VERSION" -o "$OUT"'
           if ! file "$BIN_NAME-linux-musl-$GOARCH" | grep -q "statically linked"; then
             echo "::error::$BIN_NAME-linux-musl-$GOARCH is not statically linked"
             exit 1
